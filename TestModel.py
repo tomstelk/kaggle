@@ -1,5 +1,4 @@
 
-
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import numpy as np
@@ -121,6 +120,7 @@ class TestModel():
                                          target_kwargs = target_kwargs,
                                          FeatureTransformer = FeatureTransformer,
                                          feature_kwargs = feature_kwargs,
+                                         prep = prep,
                                          df_train = df,
                                          df_test = df)
         
@@ -143,3 +143,24 @@ class TestModel():
         
         return pd.DataFrame(res)
     
+'''
+from sklearn.linear_model import LogisticRegression
+from model_definitions import prep_df, SelectTransformer, SingleSelectTransformer
+
+non_cat_features = []
+cat_features = ['Embarked']
+df_train = pd.read_csv('train.csv')
+fs = cat_features
+
+t = TestModel(3)
+resf = t.test(prep = prep_df,
+              df = df_train,
+              model_name = '|'.join(fs),
+              modelKlass = LogisticRegression,
+              model_kwargs = dict(),
+              FeatureTransformer = SelectTransformer,
+              feature_kwargs = {'features' : non_cat_features, 
+                                'cat_features' : cat_features},
+              TargetTransformer = SingleSelectTransformer,
+              target_kwargs = {'feature' : 'Survived'})
+'''
