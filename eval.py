@@ -1,19 +1,19 @@
-from TestModel import TestModel
 import pandas as pd
-from model_definitions import m1, m2, m3, SelectTransformer, prep_df
-
-df_train = prep_df( pd.read_csv('train.csv'))
-df_test = prep_df(pd.read_csv('test.csv'))
+from collections import Counter
+from copy import deepcopy
 
 
+        
 
-t = SelectTransformer(features = ['Parch'],
-                      cat_features = ['Parch'])
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+
+get_title = lambda n : n.split(',')[1].split('.')[0].strip()
+
+titles = list(map(get_title, df_train['Name'].values))
+
+default_title = 'Other'
+titles_keep = {'Master', 'Miss', 'Mr', 'Mrs'}
 
 
-t.fit(df_train)
-
-
-x = t.transform(df_test)
-
-
+df_train['Title'] = [t if t in titles_keep else default_title for t in titles]

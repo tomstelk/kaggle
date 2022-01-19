@@ -6,46 +6,19 @@ from sklearn.preprocessing import OneHotEncoder, LabelEncoder, StandardScaler
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from scipy import stats
+from collections import Counter
+from sklearn.naive_bayes import GaussianNB
+from sklearn.qda import QDA
+from sklearn.neighbors import KNeighborsRegressor
 
 
-class ModelHolder():
-    
-    
-    def __init__(self,
-                 modelKlass, 
-                 model_kwargs,
-                 FeatureTransformer,
-                 feature_kwargs,
-                 TargetTransformer,
-                 target_kwargs,
-                 prep,
-                 **other_stuff):
-        
 
-        self.model = modelKlass(**model_kwargs)
-        self.feature_transformer = FeatureTransformer(**feature_kwargs)
-        self.target_transform = TargetTransformer(**target_kwargs)
-        self.prep = prep
-        
-    def fit(self, df):
-        dfp = self.prep(df)
-        X = self.feature_transformer.fit_transform(dfp)
-        y = self.target_transform.fit_transform(dfp)
-        
-        self.model.fit(X, y)
-        
-        return self
-    
-    def predict(self, df):
-        dfp = self.prep(df)
-        X = self.feature_transformer.transform(dfp)
-        return self.model.predict(X)
-    
-    def predict_proba(self, df):
-        dfp = self.prep(df)
-        X = self.feature_transformer.transform(dfp)
-        return self.model.predict_proba(X)
-
+def test_num_str(x):
+    try:
+        float(x)
+        return True
+    except:
+        return False
 
 class CatCoder():
     
@@ -71,6 +44,20 @@ class CatCoder():
 
         return self
     
+    def _fix_missing_num(self, x, classes):
+        
+        set_classes = set(classes)
+        classes_num_dict = {float(c):c for c in classes}
+        x_num = list(map(float, x))
+
+        get_closest = lambda xi : classes_num_dict[min(classes_num_dict.keys(), key = lambda ci: abs(ci-xi))]
+        closest = list(map(get_closest, x_num))
+        
+        corrected = [x if x in set_classes else xc for x, xc in zip(x, closest)]
+        
+        return corrected
+        
+    
     def _fix_missing(self, labeller, x):
         
         classes = set(labeller.classes_)
@@ -78,8 +65,12 @@ class CatCoder():
         if all(xi in classes for xi in x):
             return x
         
-        mod = stats.mode(x).mode[0]
-        corrected = [xi if xi in classes else mod for xi in x ]
+        
+        if all (test_num_str(xi) for xi in x):
+            corrected = self._fix_missing_num(x, classes)
+        else:
+            mod = stats.mode(x).mode[0]
+            corrected = [xi if xi in classes else mod for xi in x ]
         
         return corrected
         
@@ -94,7 +85,7 @@ class CatCoder():
             labelleri = self.labellers[i]
             if self.fix_missing:
                 x = self._fix_missing(labelleri, x)
-            
+
             Xl.append(labelleri.transform(x))
         Xl = np.array(Xl).transpose()
         return self.onehot.transform(Xl).toarray()
@@ -165,6 +156,51 @@ class SingleSelectTransformer():
 
 
 
+
+
+class KNNImputer():
+    
+    
+    def __init__(self, 
+                 impute_col, 
+                 out_col,
+                 feature_cols,
+                 **knn_kwargs):
+
+        self.impute_col = impute_col
+        self.out_col = out_col
+        self.feature_cols = feature_cols
+        self.knn = KNeighborsRegressor(**knn_kwargs)
+        
+    def fit(self, df):
+        
+        df = df[~df[self.impute_col].isnull()]
+        
+        y = df[self.impute_col].values
+        X = df[self.feature_cols].values
+        
+        self.knn.fit(X, y)
+        return self
+        
+    def transform(self, df):
+
+        out = deepcopy(df)
+        dfmissing = df[df[self.impute_col].isnull()]
+        X = dfmissing[self.feature_cols].values
+        
+        missing_index = dfmissing.index.values
+        missing_values = self.knn.predict(X)
+        
+        out[self.out_col] = out[self.impute_col].values
+        
+        for i, v in zip(missing_index, missing_values):
+            out.loc[i,self.out_col] = v
+            
+        return out
+            
+        
+        
+
 def hist_group_values(x, num_groups):
     
     q = [100*i/num_groups for i in range(num_groups+1)]
@@ -176,21 +212,48 @@ def hist_group_values(x, num_groups):
                 yield i
                 break
     
-def prep_df(df):
+def prep_df(df,
+            age_groups = 10, 
+            fare_groups = 10,
+            k_age_imputer = 10):
     
     out = deepcopy(df)
     out['SexNum'] = [1 if s =='male' else 0 for s in out['Sex'].values]
-    a = out['Age'].values
-    out['AgeFilled'] = np.where(np.isnan(a), ma.array(a, mask=np.isnan(a)).mean(), a)    
+    
+    k = KNNImputer(impute_col = 'Age',
+                   out_col= 'AgeFilled',
+                   feature_cols =['Pclass',  'SibSp', 'Parch', 'SexNum'],
+                   n_neighbors = k_age_imputer)
+    k.fit(out)
+    
+    out = k.transform(out)
     
     
     f= out['Fare'].values
     out['FareFilled'] = np.where(np.isnan(f), ma.array(f, mask=np.isnan(f)).mean(), f)    
-    out['Cabin'] = out['Cabin'].map(str)
     
+    xf = out['FareFilled'].values
+    out['FareGrouped'] = [str(gfi) for gfi in hist_group_values(xf, fare_groups)]
+    
+    
+    out['Cabin'] = out['Cabin'].map(str)
     out['CabinLetter'] = [c[0] for c in out['Cabin'].values]  
-    x = out['AgeFilled'].values
-    out['AgeGrouped'] = ['a{}'.format(gai) for gai in hist_group_values(x, 19)]
+    
+    xa = out['AgeFilled'].values
+    out['AgeGrouped'] = [str(gai) for gai in hist_group_values(xa, age_groups)]
+    
+    
+    get_title = lambda n : n.split(',')[1].split('.')[0].strip()
+
+    titles = list(map(get_title, out['Name'].values))
+
+    default_title = 'Other'
+    titles_keep = {'Master', 'Miss', 'Mr', 'Mrs'}
+
+
+    out['Title'] = [t if t in titles_keep else default_title for t in titles]
+    
+    
     return out
 
 #############################################
@@ -313,5 +376,71 @@ m6= {'prep': prep_df,
       'TargetTransformer' : SingleSelectTransformer,
       'target_kwargs' : {'feature' : 'Survived'}}
 #############################################
+
+
+#############################################
+#MODEL  7
+f7s = ['SexNum',
+       'Pclass',
+       'SibSp'
+       ]
+catf7s = ['Embarked',
+          'CabinLetter',
+          'AgeGrouped']
+
+m7 = {'prep': prep_df,
+      'model_name' : 'LogReg-' + '_'.join(f7s+catf7s) ,
+      'modelKlass':  LogisticRegression,
+      'model_kwargs': dict(),
+      'FeatureTransformer': SelectTransformer,
+      'feature_kwargs': {'features' : f7s, 'cat_features':catf7s},
+      'TargetTransformer' : SingleSelectTransformer,
+      'target_kwargs' : {'feature' : 'Survived'}}
+#############################################
+
+
+
+
+
+#############################################
+#MODEL  8
+f8s = ['SexNum',
+       'AgeFilled',
+       'SibSp'
+       ]
+catf8s = []
+
+m8 = {'prep': prep_df,
+      'model_name' : 'GaussianNB-' + '_'.join(f8s+catf8s) ,
+      'modelKlass':  GaussianNB,
+      'model_kwargs': dict(),
+      'FeatureTransformer': SelectTransformer,
+      'feature_kwargs': {'features' : f8s, 'cat_features':catf8s},
+      'TargetTransformer' : SingleSelectTransformer,
+      'target_kwargs' : {'feature' : 'Survived'}}
+#############################################
+
+
+
+
+#############################################
+#MODEL  9
+f9s = ['SexNum',
+       'AgeFilled',
+       'SibSp',
+       'Parch'
+       ]
+catf9s = []
+
+m9 = {'prep': prep_df,
+      'model_name' : 'QDA-' + '_'.join(f9s+catf9s) ,
+      'modelKlass':  QDA,
+      'model_kwargs': dict(),
+      'FeatureTransformer': SelectTransformer,
+      'feature_kwargs': {'features' : f9s, 'cat_features':catf9s},
+      'TargetTransformer' : SingleSelectTransformer,
+      'target_kwargs' : {'feature' : 'Survived'}}
+#############################################
+
 
 
